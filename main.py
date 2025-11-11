@@ -35,7 +35,8 @@ def augment_audio(mel_db):
 
     return augmented  # TOUJOURS 4 versions (1 original + 3 augmentées)
 
-X, y = [], []
+
+X_raw, y_raw = [], []
 
 print("Chargement des données...")
 
@@ -51,7 +52,6 @@ else:
         song_path = os.path.join(folder, filename)
 
         # Déterminer la classe basée sur le nom du fichier
-        # Suppose que le nom contient 'background', 'drone', ou 'helicopter'
         label = None
         filename_lower = filename.lower()
 
@@ -82,52 +82,70 @@ else:
             else:
                 mel_db = mel_db[:, :max_len]
 
-            # Augmentation
-            augmented_samples = augment_audio(mel_db)
-            for aug_mel in augmented_samples:
-                X.append(aug_mel)
-                y.append(label)
+            # Stocker seulement les originaux pour split avant augmentation
+            X_raw.append(mel_db)
+            y_raw.append(label)
 
         except Exception as e:
             print(f"Erreur avec {filename}: {e}")
             continue
 
-    print(f"✅ Chargé {len(X)} samples (avec augmentation)")
-
-X = np.array(X)
-y = to_categorical(np.array(y))
+    print(f"✅ Chargé {len(X_raw)} fichiers originaux avant augmentation")
 
 
-# Normaliser les données entre 0 et 1 (important!)
-X = (X - X.min()) / (X.max() - X.min())
+# 🔹 SPLIT AVANT AUGMENTATION 🔹
+X_train_raw, X_test_raw, y_train_raw, y_test_raw = train_test_split(
+    X_raw, y_raw, test_size=0.2, shuffle=True, random_state=42
+)
 
-X = X[..., np.newaxis] # ajout d'un 4e axe
-# 20% des data va dans test le reste on train avec
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=True, random_state=42)
+# 🔹 AUGMENTATION UNIQUEMENT SUR LE TRAIN 🔹
+X_train, y_train = [], []
+for mel_db, label in zip(X_train_raw, y_train_raw):
+    augmented_samples = augment_audio(mel_db)
+    for aug_mel in augmented_samples:
+        X_train.append(aug_mel)
+        y_train.append(label)
 
+# 🔹 TEST SET SANS AUGMENTATION 🔹
+X_test = np.array(X_test_raw)
+y_test = np.array(y_test_raw)
+
+print(f"✅ Après augmentation: {len(X_train)} train samples, {len(X_test)} test samples")
+
+# Normalisation et reshape
+X_train = np.array(X_train)
+X_test = np.array(X_test)
+
+# Normaliser entre 0 et 1
+X_train = (X_train - X_train.min()) / (X_train.max() - X_train.min())
+X_test = (X_test - X_test.min()) / (X_test.max() - X_test.min())
+
+X_train = X_train[..., np.newaxis]
+X_test = X_test[..., np.newaxis]
+
+# One-hot labels
+y_train = to_categorical(np.array(y_train))
+y_test = to_categorical(np.array(y_test))
+
+
+# =================== MODEL ===================
 model = Sequential([
     Input(shape=(128, 660, 1)),
 
-    # 3 Conv layers seulement (pas 4!)
     Conv2D(32, (3, 3), activation='relu', padding='same'),
     MaxPooling2D((2, 2)),
-
+    Dropout(0.1),
 
     Conv2D(64, (3, 3), activation='relu', padding='same'),
     MaxPooling2D((2, 2)),
-
-
-    # Retiré Conv2D(256) - trop complexe!
+    Dropout(0.1),
 
     Flatten(),
-
-    # 1 Dense seulement (pas 2!)
     Dense(64, activation='relu'),
-    Dropout(0.2),  # Augmenté 0.6 → 0.7
+    Dropout(0.2),
 
     Dense(len(things), activation='softmax')
 ])
-
 
 model.compile(
     optimizer='adam',
@@ -135,13 +153,10 @@ model.compile(
     metrics=['accuracy']
 )
 
-
 early_stop = EarlyStopping(monitor='val_loss', patience=8, restore_best_weights=True, verbose=1)
-
 
 history = model.fit(
     X_train, y_train,
-
     validation_data=(X_test, y_test),
     epochs=100,
     batch_size=32,
@@ -155,31 +170,6 @@ print(f"TEST ACCURACY: {test_acc*100:.2f}%")
 print(f"{'='*60}")
 
 model.save(f'genre_classifier_{datetime.datetime.now().strftime("%m-%d_%H-%M-%S")}.keras')
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 plt.figure(figsize=(12, 5))
 
@@ -203,7 +193,3 @@ plt.grid(True)
 
 plt.tight_layout()
 plt.show()
-
-
-
-
